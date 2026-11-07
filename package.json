@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
-    "lint": "eslint",
+    "lint": "eslint src --max-warnings=0",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "spike:paypal": "tsx scripts/paypal-spike.ts",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluatePurchase, type CatalogProduct, type Mandate, type PolicyContext } from "./engine";
+import { decisiveFailures, evaluatePurchase, type CatalogProduct, type Mandate, type PolicyContext } from "./engine";
 
 const NOW = new Date("2026-11-08T12:00:00Z");
 
@@ -127,6 +127,18 @@ describe("evaluatePurchase", () => {
     const r = evaluatePurchase(mandate(), [{ productId: "p_milk", quantity: q, unitCents: 450 }], ctx());
     expect(r.decision).toBe("DENY");
     expect(failedRules(r)).toContain("item_quantity");
+  });
+
+  it("totals over-limit quantities at catalog price so the attempted spend is visible", () => {
+    const r = evaluatePurchase(mandate(), [{ productId: "p_grinder", quantity: 10, unitCents: 1 }], ctx());
+    expect(r.decision).toBe("DENY");
+    expect(r.totalCents).toBe(89000);
+    expect(failedRules(r)).toEqual(expect.arrayContaining(["item_quantity", "item_price_matches", "per_purchase_cap", "within_budget"]));
+  });
+
+  it("decisiveFailures reports only hard denials for a DENY", () => {
+    const r = evaluatePurchase(mandate(), [{ productId: "p_tv", quantity: 1, unitCents: 4000 }], ctx({ hasVaultedWallet: false }));
+    expect(decisiveFailures(r).map((c) => c.rule)).toEqual(["item_category_allowed"]);
   });
 
   it("denies an empty cart", () => {

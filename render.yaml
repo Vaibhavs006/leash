@@ -1,0 +1,42 @@
+# Render Blueprint: one web service + one Postgres. Deploy via Dashboard > New > Blueprint.
+# Paid plans are deliberate: no cold starts for judges, and the database won't expire
+# before judging ends (free Postgres expires after 30 days). Covered by hackathon credits.
+services:
+  - type: web
+    name: leash
+    runtime: node
+    plan: 0.5c-512mb
+    region: oregon
+    branch: main
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    # Deploy only after GitHub Actions (typecheck, lint, tests, build) pass on main.
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: leash-db
+          property: connectionString
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CHANNEL3_API_KEY
+        sync: false
+      - key: MAX_RUNS_PER_WORKSPACE
+        value: "15"
+
+databases:
+  - name: leash-db
+    plan: 0.1c-256mb
+    region: oregon
+    databaseName: leash
+    user: leash

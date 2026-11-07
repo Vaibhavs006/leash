@@ -1,30 +1,48 @@
 import "server-only";
-import { z } from "zod";
 
-const Env = z.object({
-  PAYPAL_CLIENT_ID: z.string().min(1),
-  PAYPAL_CLIENT_SECRET: z.string().min(1),
-  PAYPAL_WEBHOOK_ID: z.string().optional().default(""),
-  ANTHROPIC_API_KEY: z.string().min(1),
-  ANTHROPIC_MODEL: z.string().optional().transform((v) => v || "claude-sonnet-5-5"),
-  CHANNEL3_API_KEY: z.string().min(1),
-  DATABASE_URL: z.string().min(1),
-  APP_URL: z.string().url().transform((u) => u.replace(/\/$/, "")),
-  MAX_RUNS_PER_WORKSPACE: z.coerce.number().int().positive().default(15),
-});
+/**
+ * Environment access. Only DATABASE_URL is needed to boot; each integration is
+ * checked when used, so the UI can show exactly which key is missing instead of crashing.
+ */
+export type Integration = "paypal" | "anthropic" | "channel3" | "webhooks";
 
-export type ServerEnv = z.infer<typeof Env>;
+const KEYS: Record<Integration, string[]> = {
+  paypal: ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"],
+  anthropic: ["ANTHROPIC_API_KEY"],
+  channel3: ["CHANNEL3_API_KEY"],
+  webhooks: ["PAYPAL_WEBHOOK_ID"],
+};
 
-let cached: ServerEnv | null = null;
-
-/** Validated lazily so `next build` works without secrets present. */
-export function env(): ServerEnv {
-  if (cached) return cached;
-  const parsed = Env.safeParse(process.env);
-  if (!parsed.success) {
-    const missing = parsed.error.issues.map((i) => i.path.join(".")).join(", ");
-    throw new Error(`Invalid server environment: ${missing}. See .env.example`);
+export class MissingConfigError extends Error {
+  constructor(public readonly integration: Integration, public readonly keys: string[]) {
+    super(`${integration} is not configured: set ${keys.join(", ")}`);
+    this.name = "MissingConfigError";
   }
-  cached = parsed.data;
-  return cached;
+}
+
+export function configured(i: Integration): boolean {
+  return KEYS[i].every((k) => !!process.env[k]);
+}
+
+export function requireConfig(i: Integration): void {
+  const missing = KEYS[i].filter((k) => !process.env[k]);
+  if (missing.length) throw new MissingConfigError(i, missing);
+}
+
+export function integrations(): Record<Integration, boolean> {
+  return { paypal: configured("paypal"), anthropic: configured("anthropic"), channel3: configured("channel3"), webhooks: configured("webhooks") };
+}
+
+export function appUrl(): string {
+  const explicit = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
+  return (explicit || "http://localhost:3000").replace(/\/$/, "");
+}
+
+export function anthropicModelId(): string {
+  return process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
+}
+
+export function maxRunsPerWorkspace(): number {
+  const n = Number(process.env.MAX_RUNS_PER_WORKSPACE);
+  return Number.isInteger(n) && n > 0 ? n : 15;
 }

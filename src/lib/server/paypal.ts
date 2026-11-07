@@ -1,14 +1,14 @@
 import "server-only";
 import { PayPalClient } from "@/lib/paypal/client";
-import { env } from "./env";
+import { requireConfig } from "./env";
 
 const g = globalThis as unknown as { __leashPayPal?: PayPalClient };
 
 export function paypal(): PayPalClient {
-  const e = env();
+  requireConfig("paypal");
   return (g.__leashPayPal ??= new PayPalClient({
-    clientId: e.PAYPAL_CLIENT_ID,
-    clientSecret: e.PAYPAL_CLIENT_SECRET,
+    clientId: process.env.PAYPAL_CLIENT_ID!,
+    clientSecret: process.env.PAYPAL_CLIENT_SECRET!,
     env: "sandbox",
   }));
 }

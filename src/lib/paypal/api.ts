@@ -256,3 +256,9 @@ export async function verifyWebhookSignature(
   );
   return res.verification_status === "SUCCESS";
 }
+
+// ---------- Vault token management ----------
+
+export async function deletePaymentToken(pp: PayPalClient, vaultId: string): Promise<void> {
+  await pp.request("DELETE", `/v3/vault/payment-tokens/${encodeURIComponent(vaultId)}`);
+}

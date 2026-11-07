@@ -14,6 +14,7 @@ import * as schema from "@/db/schema";
 import { mandates, runEvents, runs, type RunEventType } from "@/db/schema";
 import type { NormalizedProduct } from "@/lib/channel3";
 import { DuplicateRequestError, mandateSpend, recordCatalog, requestPurchase, type PaymentGateway } from "@/lib/purchases/service";
+import { decisiveFailures } from "@/lib/policy/engine";
 import { injectedListing } from "./redteam";
 
 type DB = PostgresJsDatabase<typeof schema>;
@@ -153,7 +154,7 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
             decision: policy.decision,
             totalCents: policy.totalCents,
             reasons: policy.reasons,
-            failed: policy.checks.filter((c) => !c.passed).map((c) => c.rule),
+            failed: decisiveFailures(policy).map((c) => c.rule),
           });
           if (policy.decision === "AUTO_APPROVE") {
             await logEvent(db, runId, "payment", {

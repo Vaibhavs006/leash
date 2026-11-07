@@ -138,7 +138,9 @@ export function evaluatePurchase(mandate: Mandate, proposed: ProposedItem[], ctx
     const allowed = mandate.allowedMerchants.length === 0 || mandate.allowedMerchants.map(norm).includes(merchant);
     add("item_merchant_allowed", !blocked && allowed, `Merchant "${product.merchant}"${blocked ? " is blocked" : ""}`);
 
-    if (qtyOk) items.push({ product, quantity: p.quantity, lineCents: product.priceCents * p.quantity });
+    // Price every positive-integer quantity (even over the limit) so totals reflect what was
+    // actually attempted: a hijacked agent asking for 10 units is shown as 10 x catalog price.
+    if (Number.isInteger(p.quantity) && p.quantity >= 1) items.push({ product, quantity: p.quantity, lineCents: product.priceCents * p.quantity });
   }
 
   // Totals always use CATALOG prices, never the agent's numbers.
@@ -186,4 +188,10 @@ export function evaluatePurchase(mandate: Mandate, proposed: ProposedItem[], ctx
   const reasons = (denied.length > 0 ? denied : escalated).map((c) => c.detail);
 
   return { decision, totalCents, items, checks, reasons };
+}
+
+/** The failures that explain a decision: hard denials for DENY, escalations for REQUIRE_APPROVAL. */
+export function decisiveFailures(r: PolicyResult): Check[] {
+  const failed = r.checks.filter((c) => !c.passed);
+  return r.decision === "DENY" ? failed.filter((c) => c.severity === "deny") : failed;
 }
