@@ -12,6 +12,8 @@ services:
     preDeployCommand: npm run db:migrate
     startCommand: npm start
     healthCheckPath: /api/health
+    # Let in-flight agent runs (Next.js after() callbacks) finish during deploys.
+    maxShutdownDelaySeconds: 60
     # Deploy only after GitHub Actions (typecheck, lint, tests, build) pass on main.
     autoDeployTrigger: checksPass
     envVars:

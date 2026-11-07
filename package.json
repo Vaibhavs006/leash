@@ -8,11 +8,12 @@
     "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "eslint src --max-warnings=0",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "spike:paypal": "tsx scripts/paypal-spike.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
-    "test:int": "VITEST_INTEGRATION=1 vitest run --fileParallelism=false"
+    "test:int": "VITEST_INTEGRATION=1 vitest run --fileParallelism=false",
+    "check:channel3": "tsx scripts/channel3-check.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.98",

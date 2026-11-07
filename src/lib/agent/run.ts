@@ -26,6 +26,7 @@ export interface AgentDeps {
   model: LanguageModel;
   search: (query: string, maxPriceUsd?: number) => Promise<NormalizedProduct[]>;
   maxSteps?: number;
+  timeoutMs?: number;
 }
 
 const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
@@ -194,6 +195,8 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
       prompt: `Owner's goal: ${run.goal}`,
       tools,
       stopWhen: stepCountIs(deps.maxSteps ?? 12),
+      // Hard ceiling so a run always settles before the stale-run sweep (5 min).
+      abortSignal: AbortSignal.timeout(deps.timeoutMs ?? 4 * 60 * 1000),
       maxOutputTokens: 2000,
       onStepEnd: async (step) => {
         const text = step.text?.trim();

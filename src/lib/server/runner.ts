@@ -1,6 +1,6 @@
 import "server-only";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { after } from "next/server";
 import { db } from "@/db";
 import { mandates, runs, workspaces, type Workspace } from "@/db/schema";
@@ -14,9 +14,17 @@ import { anthropicModelId, appUrl, maxRunsPerWorkspace, requireConfig } from "./
 
 export class RunLimitError extends Error {}
 
+/** Agent runs are capped at 12 model steps; anything older than this was interrupted. */
+const STALE_RUN_MS = 5 * 60 * 1000;
+
 async function reserveRun(ws: Workspace, mandateId: string, goal: string, redTeam: boolean) {
   const [m] = await db.select().from(mandates).where(and(eq(mandates.id, mandateId), eq(mandates.workspaceId, ws.id)));
   if (!m) throw new Error("Mandate not found");
+  // A run interrupted by a redeploy/crash would stay "running" forever; expire it.
+  await db
+    .update(runs)
+    .set({ status: "failed", summary: "Interrupted (server restarted). Please run again.", finishedAt: new Date() })
+    .where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running"), lt(runs.createdAt, new Date(Date.now() - STALE_RUN_MS))));
   const active = await db.select({ id: runs.id }).from(runs).where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running")));
   if (active.length) throw new RunLimitError("An agent run is already in progress.");
   // Atomic quota increment protects the public demo's AI bill.
