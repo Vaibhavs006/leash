@@ -176,7 +176,7 @@ export function evaluatePurchase(mandate: Mandate, proposed: ProposedItem[], ctx
   add(
     "wallet_connected",
     ctx.hasVaultedWallet,
-    ctx.hasVaultedWallet ? "Saved PayPal wallet available" : "No saved wallet — buyer must approve on PayPal",
+    ctx.hasVaultedWallet ? "Saved wallet available" : "No saved wallet: the owner must approve the payment",
     "escalate",
   );
 

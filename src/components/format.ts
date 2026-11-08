@@ -24,7 +24,7 @@ export const RULE_LABELS: Record<string, string> = {
   within_budget: "Within remaining budget",
   auto_approve_limit: "Under auto-approve limit",
   no_recent_duplicate: "Not a repeat purchase (24h)",
-  wallet_connected: "Saved PayPal wallet",
+  wallet_connected: "Saved wallet",
 };
 
 export function daysUntil(iso: string | Date): number {
