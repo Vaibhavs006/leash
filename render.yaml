@@ -35,10 +35,18 @@ services:
         sync: false
       - key: MAX_RUNS_PER_WORKSPACE
         value: "15"
+      # auto: any integration without keys runs as a labelled offline simulator.
+      # off: integrations without keys are disabled (503). Never affects configured integrations.
+      - key: DEMO_MODE
+        value: auto
+      # APP_URL is optional: Render provides RENDER_EXTERNAL_URL, which Leash uses for PayPal redirects.
 
 databases:
   - name: leash-db
     plan: 0.1c-256mb
     region: oregon
+    postgresMajorVersion: "17"
     databaseName: leash
     user: leash
+    # No public access: only services in this Render workspace can connect.
+    ipAllowList: []

@@ -1,13 +1,14 @@
 import "server-only";
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, count, eq, lt, sql } from "drizzle-orm";
 import { after } from "next/server";
 import { db } from "@/db";
-import { mandates, runs, workspaces, type Workspace } from "@/db/schema";
+import { mandates, purchases, runs, workspaces, type Workspace } from "@/db/schema";
 import { executeRun, logEvent } from "@/lib/agent/run";
 import { hijackedCart, injectedListing } from "@/lib/agent/redteam";
 import { searchProducts } from "@/lib/channel3";
 import { simulatedSearch } from "@/lib/demo/catalog";
+import { newSimulatedVaultId, SIM_PAYER_EMAIL } from "@/lib/demo/gateway";
 import { createRuleBasedPlanner } from "@/lib/demo/planner";
 import { decisiveFailures } from "@/lib/policy/engine";
 import { recordCatalog, requestPurchase } from "@/lib/purchases/service";
@@ -19,6 +20,7 @@ export class RunLimitError extends Error {}
 
 /** Agent runs are capped at 12 model steps / 4 minutes; anything older than this was interrupted. */
 const STALE_RUN_MS = 5 * 60 * 1000;
+const MAX_RUNS_STORED = 100;
 
 async function reserveRun(
   ws: Workspace,
@@ -35,6 +37,9 @@ async function reserveRun(
     .where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running"), lt(runs.createdAt, new Date(Date.now() - STALE_RUN_MS))));
   const active = await db.select({ id: runs.id }).from(runs).where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running")));
   if (active.length) throw new RunLimitError("An agent run is already in progress.");
+  // Database-spam guard for free (simulated) runs. Reset demo clears runs.
+  const [{ n }] = await db.select({ n: count() }).from(runs).where(eq(runs.workspaceId, ws.id));
+  if (n >= MAX_RUNS_STORED) throw new RunLimitError(`This workspace has ${n} runs. Use "Reset demo" to start fresh.`);
   // Atomic quota on live LLM runs protects the public demo's AI bill. Simulated runs are free.
   if (opts.agentMode === "live") {
     const bumped = await db
@@ -122,4 +127,41 @@ export async function simulateHijack(ws: Workspace, mandateId: string) {
   await logEvent(db, run.id, "final", { text: summary });
   await db.update(runs).set({ status: "completed", summary, finishedAt: new Date() }).where(eq(runs.id, run.id));
   return run;
+}
+
+/** Goals for the sample history, in order. The last one is left waiting for approval. */
+const SAMPLE_GOALS = [
+  "Restock espresso beans and oat milk for the week",
+  "We're nearly out of 12oz hot cups and lids",
+  "Buy a gaming headset for the back office",
+  "Buy a commercial espresso machine",
+];
+
+/**
+ * Offline demo only: fills an empty workspace with realistic history by running the REAL
+ * simulated agent, policy engine and payment simulator (no rows are fabricated).
+ * Produces: two auto-paid restocks, one policy denial, one blocked hijack, one pending approval.
+ */
+export async function loadSampleHistory(ws: Workspace) {
+  if (modes().payments !== "simulated") throw new Error("Sample history is only available in offline demo mode (no PayPal keys).");
+  const [existingPurchase] = await db.select({ id: purchases.id }).from(purchases).where(eq(purchases.workspaceId, ws.id)).limit(1);
+  const [existingRun] = await db.select({ id: runs.id }).from(runs).where(eq(runs.workspaceId, ws.id)).limit(1);
+  if (existingPurchase || existingRun) throw new Error('Sample history needs an empty workspace. Use "Reset demo" first.');
+  const [m] = await db.select().from(mandates).where(and(eq(mandates.workspaceId, ws.id), eq(mandates.status, "active"))).limit(1);
+  if (!m) throw new Error("No active mandate. Use Reset demo to restore the default one.");
+
+  if (!ws.vaultId || !ws.walletSimulated) {
+    await db.update(workspaces).set({ vaultId: newSimulatedVaultId(), walletSimulated: true, payerEmail: SIM_PAYER_EMAIL }).where(eq(workspaces.id, ws.id));
+  }
+  const payments = currentPayments();
+  const deps = { db, gateway: payments.gateway, simulatedPayments: true, appUrl: appUrl(), search: async (q: string, max?: number) => simulatedSearch(q, max) };
+
+  for (const goal of SAMPLE_GOALS.slice(0, 3)) {
+    const run = await reserveRun(ws, m.id, goal, { redTeam: false, agentMode: "simulated", catalogMode: "simulated" });
+    await executeRun({ ...deps, model: createRuleBasedPlanner() }, run.id);
+  }
+  await simulateHijack(ws, m.id);
+  const last = await reserveRun(ws, m.id, SAMPLE_GOALS[3], { redTeam: false, agentMode: "simulated", catalogMode: "simulated" });
+  await executeRun({ ...deps, model: createRuleBasedPlanner() }, last.id);
+  return { runs: SAMPLE_GOALS.length + 1 };
 }

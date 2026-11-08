@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { purchases } from "@/db/schema";
 import { completeBuyerApproval } from "@/lib/purchases/service";
 import { appUrl } from "@/lib/server/env";
+import { publicError } from "@/lib/server/http";
 import { depsForPurchase } from "@/lib/server/payments";
 import { currentWorkspace } from "@/lib/server/session";
 
@@ -25,7 +26,7 @@ export async function GET(req: Request) {
     if (p.status !== "captured" && p.error) back.searchParams.set("error", p.error.slice(0, 200));
   } catch (e) {
     back.searchParams.set("paid", "0");
-    back.searchParams.set("error", (e instanceof Error ? e.message : String(e)).slice(0, 200));
+    back.searchParams.set("error", publicError(e).message.slice(0, 200));
   }
   return NextResponse.redirect(back);
 }

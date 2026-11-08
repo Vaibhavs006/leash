@@ -11,9 +11,10 @@
     "typecheck": "next typegen && tsc --noEmit",
     "spike:paypal": "tsx scripts/paypal-spike.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate": "node scripts/migrate.mjs",
     "test:int": "VITEST_INTEGRATION=1 vitest run --fileParallelism=false",
-    "check:channel3": "tsx scripts/channel3-check.ts"
+    "check:channel3": "tsx scripts/channel3-check.ts",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.98",
@@ -40,5 +41,8 @@
     "tsx": "^4.23.15",
     "typescript": "^5",
     "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

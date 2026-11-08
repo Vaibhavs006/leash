@@ -21,6 +21,7 @@ export function AgentConsole({
   busy,
   act,
   onRunSettled,
+  loadSample,
 }: {
   state: State;
   mandate: MandateView | undefined;
@@ -29,6 +30,7 @@ export function AgentConsole({
   busy: string | null;
   act: Act;
   onRunSettled: () => void;
+  loadSample?: () => void;
 }) {
   const [goal, setGoal] = useState(SUGGESTIONS[0]);
   const [redTeam, setRedTeam] = useState(false);
@@ -36,6 +38,19 @@ export function AgentConsole({
   const simAgent = state.modes.agent === "simulated";
   const shownRunId = activeRunId ?? state.runs[0]?.id ?? null;
   const running = state.runs.some((r) => r.status === "running");
+  const blockedReason = !available
+    ? "Some integrations are unavailable (missing keys with DEMO_MODE=off). See README → Setup."
+    : !mandate
+      ? "No mandate. Use Reset demo to restore the default one."
+      : mandate.status !== "active"
+        ? `The mandate is ${mandate.status}. The agent can run, but every purchase will be blocked.`
+        : null;
+  const canRun = !!mandate && busy === null && !running && goal.trim().length >= 5 && available;
+  const startRun = () =>
+    void act("run", async () => {
+      const run = await api<RunView>("/api/runs", { method: "POST", body: JSON.stringify({ mandateId: mandate!.id, goal, redTeam }) });
+      setActiveRunId(run.id);
+    });
 
   return (
     <section className="card flex min-h-[560px] flex-col">
@@ -56,6 +71,12 @@ export function AgentConsole({
             value={goal}
             maxLength={500}
             onChange={(e) => setGoal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canRun) {
+                e.preventDefault();
+                startRun();
+              }
+            }}
             placeholder="What should the agent buy?"
             aria-label="Goal for the agent"
           />
@@ -68,16 +89,7 @@ export function AgentConsole({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button
-            disabled={!mandate || busy !== null || running || goal.trim().length < 5 || !available}
-            title={available ? undefined : "Some integrations are unavailable (missing keys with DEMO_MODE=off)"}
-            onClick={() =>
-              void act("run", async () => {
-                const run = await api<RunView>("/api/runs", { method: "POST", body: JSON.stringify({ mandateId: mandate!.id, goal, redTeam }) });
-                setActiveRunId(run.id);
-              })
-            }
-          >
+          <Button disabled={!canRun} title="Run (Ctrl/⌘ + Enter)" onClick={startRun}>
             {busy === "run" || running ? <Spinner /> : <span aria-hidden>▶</span>}
             Run agent
           </Button>
@@ -101,6 +113,8 @@ export function AgentConsole({
             Simulate hijacked agent
           </Button>
         </div>
+        {blockedReason && <p className="text-xs text-amber-800">{blockedReason}</p>}
+        {running && <p className="text-xs text-slate-500">An agent run is in progress. New runs unlock when it finishes.</p>}
       </div>
 
       <div className="mt-4 flex-1 border-t border-slate-100">
@@ -109,7 +123,15 @@ export function AgentConsole({
         ) : (
           <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-1 p-8 text-center">
             <p className="text-sm font-medium text-slate-700">No agent runs yet</p>
-            <p className="max-w-sm text-xs text-slate-500">Give the agent a goal. Every search, cart and policy decision shows up here live.</p>
+            <p className="max-w-sm text-xs text-slate-500">
+              Give the agent a goal, or try <span className="font-medium text-rose-700">Simulate hijacked agent</span>. Every search, cart and policy decision shows up here live.
+            </p>
+            {loadSample && (
+              <Button variant="secondary" size="sm" className="mt-3" disabled={busy !== null} onClick={loadSample}>
+                {busy === "sample" ? <Spinner /> : null}
+                Load sample history (simulated)
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -124,8 +146,15 @@ export function AgentConsole({
                 "max-w-[220px] shrink-0 truncate rounded-lg px-2.5 py-1 text-left text-[11px] ring-1",
                 r.id === shownRunId ? "bg-ink text-white ring-ink" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50",
               )}
-              title={r.goal}
+              title={`${r.goal} (${r.status})`}
             >
+              <span
+                className={cx(
+                  "mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle",
+                  r.status === "running" ? "bg-sky-400" : r.status === "failed" ? "bg-rose-400" : "bg-emerald-400",
+                )}
+                aria-hidden
+              />
               {r.redTeam ? "⚠ " : ""}
               {r.goal}
             </button>
@@ -149,7 +178,7 @@ function RunTimeline({ runId, onSettled }: { runId: string; onSettled: () => voi
   const [run, setRun] = useState<RunView | null>(null);
   const [events, setEvents] = useState<EventView[]>([]);
   const last = useRef(0);
-  const bottom = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let stop = false;
@@ -176,12 +205,27 @@ function RunTimeline({ runId, onSettled }: { runId: string; onSettled: () => voi
     };
   }, [runId, onSettled]);
 
+  // Follow new events inside the timeline only (never scroll the page).
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const el = box.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [events.length]);
 
+  if (!run) {
+    return (
+      <div className="space-y-3 px-5 py-4" aria-busy="true" aria-label="Loading run">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex gap-3">
+            <div className="h-6 w-6 animate-pulse rounded-full bg-slate-100" />
+            <div className="h-6 flex-1 animate-pulse rounded-lg bg-slate-100" style={{ maxWidth: `${80 - i * 15}%` }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className="max-h-[520px] space-y-2.5 overflow-y-auto px-5 py-4">
+    <div ref={box} className="max-h-[520px] space-y-2.5 overflow-y-auto px-5 py-4">
       {run && (
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span className="font-medium text-slate-700">Goal:</span>
@@ -194,7 +238,6 @@ function RunTimeline({ runId, onSettled }: { runId: string; onSettled: () => voi
       {events.map((e) => (
         <EventRow key={e.id} e={e} />
       ))}
-      <div ref={bottom} />
     </div>
   );
 }

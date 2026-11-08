@@ -12,6 +12,8 @@ Leash solves this by separating **who proposes** from **who decides**:
 
 The mandate model mirrors the *intent mandate / cart mandate* idea behind Google's Agent Payments Protocol (AP2), implemented on PayPal today.
 
+> **Judges: try it in 60 seconds, no keys needed.** Open the demo (or run it locally, below). If it says *Offline demo mode*, click **Load sample history**, then **Simulate hijacked agent**, then expand **Why?** on any ledger row. Every simulated part is labelled; with API keys the same flows run on PayPal sandbox, Claude and Channel3.
+
 ---
 
 ## What the demo shows
@@ -43,6 +45,8 @@ flowchart LR
   WH[PayPal webhooks<br/>signature verified] --> L
 ```
 
+Without API keys, each external box is swapped for a labelled offline simulator (`src/lib/demo/`): a fixed catalog of fictional `.example` merchants, a rule-based planner that implements the AI SDK model interface (so it runs through the same tool loop), and a payment simulator with `SIM-` ids. The policy engine, ledger and database logic are identical in both modes.
+
 **The security boundary is `src/lib/policy/engine.ts`.** It has no I/O and no LLM, and takes time as an input. It is the only thing that can turn a proposal into a payment.
 
 ### Safety properties (each is tested)
@@ -55,8 +59,10 @@ flowchart LR
 | No double charges on retries | Idempotency key per tool call, plus `PayPal-Request-Id` on every PayPal POST |
 | Approvals re-check hard rules at approval time | A mandate paused after escalation blocks the approval |
 | Retailer text is treated as data | Descriptions fenced as `retailer_description_untrusted`, and the system prompt says so. The policy holds even if the model complies anyway. |
-| Webhooks can't forge state | `verify-webhook-signature` is required; unverified events are stored but never acted on; deduped by event id |
-| Public demo can't run up the AI bill | Per-visitor run quota (atomic), one active run per visitor |
+| Webhooks can't forge state | `verify-webhook-signature` is required; unverified events are neither stored nor acted on; recorded and applied atomically, deduped by event id |
+| Public demo can't run up the AI bill | Per-visitor quota on live Claude runs (atomic), one active run per visitor |
+| Visitors are isolated | Anonymous httpOnly workspace cookie; every query is scoped to the workspace; cross-origin POSTs are rejected |
+| Errors don't leak internals | Database/runtime errors return a generic message with a reference id; details only in server logs |
 
 ## PayPal integration
 
@@ -86,9 +92,9 @@ Implemented as a thin typed client (`src/lib/paypal/`) with OAuth token caching,
 Requirements: Node 24, Docker.
 
 ```bash
-git clone <this repo> && cd leash
+git clone https://github.com/Vaibhavs006/leash.git && cd leash
 npm ci
-cp .env.example .env.local        # then fill in the keys (see below)
+cp .env.example .env.local        # works as-is (offline demo); add keys later
 docker run -d --name leash-pg -e POSTGRES_USER=leash -e POSTGRES_PASSWORD=leash -e POSTGRES_DB=leash -p 5433:5432 postgres:17-alpine
 npm run db:migrate
 npm run dev                       # http://localhost:3000
@@ -142,15 +148,44 @@ Integration tests use real Postgres. The agent loop is exercised with a scripted
 
 ## Deploy (Render)
 
-`render.yaml` defines the web service and Postgres. In Render: **New → Blueprint →** pick this repo, then enter the secret env vars when prompted. Migrations run as the `preDeployCommand`. `autoDeployTrigger: checksPass` means a push to `main` deploys **only after GitHub Actions pass**. `/api/health` reports the deployed commit, so you can confirm the live site matches your latest push.
+`render.yaml` is a Render Blueprint: one always-on web service (`0.5c-512mb`) and one Postgres 17 database (`0.1c-256mb`, internal connections only). Paid plans are deliberate: no cold starts for judges, and the database won't expire before judging ends (free Postgres expires after 30 days).
 
-After the first deploy, register the webhook in the PayPal sandbox app: URL `https://<your-service>.onrender.com/api/paypal/webhook`, events `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`, `VAULT.PAYMENT-TOKEN.DELETED`. Then set `PAYPAL_WEBHOOK_ID` in Render.
+1. Render Dashboard → **New → Blueprint** → connect `Vaibhavs006/leash` → branch `main`.
+2. When prompted for the `sync: false` variables, paste the keys you have. Any you leave empty run as labelled simulators (`DEMO_MODE=auto`).
+3. Render builds (`npm ci && npm run build`), runs migrations (`preDeployCommand: npm run db:migrate`), starts the app and waits for `/api/health`.
+4. Verify the deploy: `npm run smoke -- https://<your-service>.onrender.com` (safe in live mode: it never triggers live payments or Claude runs). `/api/health` shows the deployed commit and which integrations are live.
+5. If PayPal is live: in the sandbox app's **Webhooks**, add `https://<your-service>.onrender.com/api/paypal/webhook` with events `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED`, `VAULT.PAYMENT-TOKEN.DELETED`. Copy the Webhook ID into Render as `PAYPAL_WEBHOOK_ID`.
+
+After that, `autoDeployTrigger: checksPass` deploys each push to `main` **only after GitHub Actions pass** (typecheck, lint, unit and integration tests, build). `maxShutdownDelaySeconds: 60` lets in-flight agent runs finish during a deploy.
+
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes | Wired automatically from `leash-db` by the Blueprint |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | for live payments | Sandbox REST app credentials |
+| `PAYPAL_WEBHOOK_ID` | for webhook reconciliation | From the sandbox app's Webhooks page, after the first deploy |
+| `ANTHROPIC_API_KEY` | for the live agent | `ANTHROPIC_MODEL` optional (default `claude-sonnet-5-5`) |
+| `CHANNEL3_API_KEY` | for live product search | |
+| `DEMO_MODE` | no | `auto` (default): simulators fill gaps. `off`: missing integrations return 503 |
+| `MAX_RUNS_PER_WORKSPACE` | no | Live Claude runs per visitor (default 15) |
+| `APP_URL` | no | Defaults to Render's `RENDER_EXTERNAL_URL`; used for PayPal return URLs |
+| `NODE_VERSION` | set by Blueprint | `24` |
+
+## Verification status
+
+| Integration | Implemented against | Verified live |
+|---|---|---|
+| PayPal Orders v2, Vault v3, refunds, webhooks | Official API reference (field names, `payer-action` link, `vault_id`, verify-signature fields) | Not yet: run `npm run spike:paypal` |
+| Channel3 search | Official OpenAPI schema (`Price.price`, `CategoryRef` path, `config.currency`) | Not yet: run `npm run check:channel3` |
+| Claude via AI SDK | Installed `@ai-sdk/anthropic` (model id `claude-sonnet-5-5` is a known id) | Not yet: run a goal with `ANTHROPIC_API_KEY` set |
+| Offline simulators, policy engine, ledger | Unit, integration and smoke tests | Yes |
 
 ## Limitations (honest)
 
 - **Sandbox only.** Leash acts as merchant of record in the PayPal sandbox. No real orders are placed with retailers; fulfilment is out of scope.
 - Purchases are USD only; Channel3 offers in other currencies are skipped.
 - Visitors get anonymous, cookie-scoped workspaces (no accounts). That's right for a judged demo, but not production auth.
+- PayPal's webhook simulator events can't be signature-verified by PayPal's own verify endpoint, so Leash ignores them by design; real sandbox transactions produce verifiable events.
+- "Load sample history" is offline-demo only: in live mode Leash never fabricates purchases.
 
 ## Project layout
 
@@ -166,7 +201,10 @@ src/lib/demo/                  offline simulators: catalog, rule-based planner, 
 src/app/demo/approve/          offline payment simulator page (only active without PayPal keys)
 src/app/api/                   route handlers
 src/components/                dashboard UI
-scripts/paypal-spike.ts        end-to-end sandbox verification
+scripts/paypal-spike.ts        end-to-end PayPal sandbox verification
+scripts/channel3-check.ts      live Channel3 response-shape check
+scripts/smoke.mjs              smoke test against a running server (local or deployed)
+scripts/migrate.mjs            migrations (production dependencies only)
 ```
 
 ## License

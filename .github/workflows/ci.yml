@@ -33,3 +33,10 @@ jobs:
       - run: npm test
       - run: npm run test:int
       - run: npm run build
+      # Production server + HTTP smoke test (offline demo mode: no secrets in CI).
+      - run: npm run db:migrate
+      - name: Smoke test production build
+        run: |
+          PORT=3000 npm start > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/health > /dev/null && break; sleep 1; done
+          npm run smoke -- http://localhost:3000 || (cat server.log; exit 1)

@@ -5,6 +5,7 @@ import { workspaces } from "@/db/schema";
 import { isSimulatedId, newSimulatedVaultId, SIM_PAYER_EMAIL } from "@/lib/demo/gateway";
 import { createPaymentTokenFromSetupToken } from "@/lib/paypal/api";
 import { appUrl } from "@/lib/server/env";
+import { publicError } from "@/lib/server/http";
 import { modes } from "@/lib/server/modes";
 import { paypal } from "@/lib/server/paypal";
 import { currentWorkspace } from "@/lib/server/session";
@@ -37,7 +38,7 @@ export async function GET() {
     back.searchParams.set("wallet", "connected");
   } catch (e) {
     back.searchParams.set("wallet", "error");
-    back.searchParams.set("error", (e instanceof Error ? e.message : String(e)).slice(0, 200));
+    back.searchParams.set("error", publicError(e).message.slice(0, 200));
   }
   return NextResponse.redirect(back);
 }

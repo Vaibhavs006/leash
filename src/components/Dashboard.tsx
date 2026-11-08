@@ -96,6 +96,15 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
   }
 
   const mandate = state.mandates.find((m) => m.status !== "revoked") ?? state.mandates[0];
+  const canLoadSample = state.modes.payments === "simulated" && state.purchases.length === 0 && state.runs.length === 0;
+  const loadSample = canLoadSample
+    ? () =>
+        void act("sample", async () => {
+          await api("/api/demo/sample", { method: "POST" });
+          setActiveRunId(null);
+          notify({ tone: "green", text: "Sample history loaded: 5 simulated agent runs through the real policy engine." });
+        })
+    : undefined;
   const pending = state.purchases.filter((p) => p.status === "pending_approval" || p.status === "awaiting_payer");
 
   return (
@@ -106,7 +115,9 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold tracking-tight">Leash</span>
-              {state.modes.payments === "live" ? <Badge tone="violet">PayPal Sandbox</Badge> : <Badge tone="amber">Offline demo</Badge>}
+              <span className="hidden sm:inline">
+                {state.modes.payments === "live" ? <Badge tone="violet">PayPal Sandbox</Badge> : <Badge tone="amber">Offline demo</Badge>}
+              </span>
             </div>
             <p className="hidden truncate text-xs text-slate-500 sm:block">Spending controls for AI purchasing agents · {state.workspace.businessName}</p>
           </div>
@@ -117,11 +128,11 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
               size="sm"
               disabled={busy !== null}
               onClick={() => {
-                if (!confirm("Reset this demo workspace? This clears your mandates, agent runs and ledger (sandbox data only). Your saved PayPal wallet is kept.")) return;
+                if (!confirm("Reset this demo workspace? This clears your mandates, agent runs and ledger (demo data only). Your saved wallet is kept.")) return;
                 void act("reset", async () => {
                   await api("/api/demo/reset", { method: "POST" });
                   setActiveRunId(null);
-                  notify({ tone: "green", text: "Demo reset." });
+                  notify({ tone: "green", text: "Demo reset. The default mandate is restored and the ledger is empty." });
                 });
               }}
             >
@@ -149,16 +160,27 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
             busy={busy}
             act={act}
             onRunSettled={refresh}
+            loadSample={loadSample}
           />
         </div>
 
-        <Ledger purchases={state.purchases} busy={busy} act={act} />
+        <Ledger purchases={state.purchases} busy={busy} act={act} loadSample={loadSample} />
 
-        <footer className="pb-8 pt-2 text-center text-xs text-slate-400">
-          {state.modes.payments === "live"
-            ? "PayPal sandbox: Leash acts as merchant of record; no real orders are placed with retailers."
-            : "Offline demo: payments are simulated and no money moves."}{" "}
-          {state.modes.catalog === "live" ? "Product data from Channel3." : "Products come from a simulated catalog (.example merchants)."}
+        <footer className="space-y-2 pb-8 pt-2 text-center text-xs text-slate-400">
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
+            <span>Integrations:</span>
+            {(["catalog", "agent", "payments"] as const).map((k) => (
+              <Badge key={k} tone={state.modes[k] === "live" ? "green" : state.modes[k] === "simulated" ? "amber" : "red"}>
+                {MODE_LABELS[k][state.modes[k]]}
+              </Badge>
+            ))}
+          </div>
+          <p>
+            {state.modes.payments === "live"
+              ? "PayPal sandbox: Leash acts as merchant of record; no real orders are placed with retailers."
+              : "Offline demo: payments are simulated and no money moves."}{" "}
+            {state.modes.catalog === "live" ? "Product data from Channel3." : "Products come from a simulated catalog (.example merchants)."}
+          </p>
         </footer>
       </main>
 
@@ -213,11 +235,17 @@ function Hero({ modes }: { modes: State["modes"] }) {
 function WalletPill({ state, busy, act }: { state: State; busy: string | null; act: (k: string, fn: () => Promise<void>) => Promise<void> }) {
   if (state.workspace.walletConnected) {
     return (
-      <div className="hidden items-center gap-2 sm:flex">
-        <Badge tone="green">
-          ● {state.workspace.walletSimulated ? "Simulated wallet saved" : "PayPal wallet saved"}
-          {state.workspace.payerEmail ? ` · ${state.workspace.payerEmail}` : ""}
-        </Badge>
+      <div className="flex items-center gap-1 sm:gap-2">
+        {/* Visibility lives on wrappers: Badge's own inline-flex would override `hidden`. */}
+        <span className="sm:hidden">
+          <Badge tone="green">● Wallet</Badge>
+        </span>
+        <span className="hidden sm:inline">
+          <Badge tone="green">
+            ● {state.workspace.walletSimulated ? "Simulated wallet saved" : "PayPal wallet saved"}
+            {state.workspace.payerEmail ? ` · ${state.workspace.payerEmail}` : ""}
+          </Badge>
+        </span>
         <Button
           variant="ghost"
           size="sm"
