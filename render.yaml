@@ -1,19 +1,18 @@
 # Render Blueprint: one web service + one Postgres. Deploy via Dashboard > New > Blueprint.
-# Paid plans are deliberate: no cold starts for judges, and the database won't expire
-# before judging ends (free Postgres expires after 30 days). Covered by hackathon credits.
+# FREE plans (no card on file). Trade-offs: the web service sleeps after 15 min idle
+# (~1 min cold start), and free Postgres expires 30 days after creation. Upgrade both
+# (web 0.5c-512mb, db 0.1c-256mb) before judging if possible.
 services:
   - type: web
     name: leash
     runtime: node
-    plan: 0.5c-512mb
+    plan: free
     region: oregon
     branch: main
     buildCommand: npm ci && npm run build
-    preDeployCommand: npm run db:migrate
-    startCommand: npm start
+    # Free services have no preDeployCommand: migrations (idempotent) run at startup.
+    startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
-    # Let in-flight agent runs (Next.js after() callbacks) finish during deploys.
-    maxShutdownDelaySeconds: 60
     # Deploy only after GitHub Actions (typecheck, lint, tests, build) pass on main.
     autoDeployTrigger: checksPass
     envVars:
@@ -43,7 +42,7 @@ services:
 
 databases:
   - name: leash-db
-    plan: 0.1c-256mb
+    plan: free
     region: oregon
     postgresMajorVersion: "17"
     databaseName: leash
