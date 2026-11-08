@@ -21,11 +21,11 @@ export class MissingConfigError extends Error {
 }
 
 export function configured(i: Integration): boolean {
-  return KEYS[i].every((k) => !!process.env[k]);
+  return KEYS[i].every((k) => !!process.env[k]?.trim());
 }
 
 export function requireConfig(i: Integration): void {
-  const missing = KEYS[i].filter((k) => !process.env[k]);
+  const missing = KEYS[i].filter((k) => !process.env[k]?.trim());
   if (missing.length) throw new MissingConfigError(i, missing);
 }
 
