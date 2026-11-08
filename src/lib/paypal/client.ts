@@ -117,7 +117,14 @@ export class PayPalClient {
     }
 
     const text = await res.text();
-    const body = text ? (JSON.parse(text) as unknown) : undefined;
+    let body: unknown;
+    try {
+      body = text ? (JSON.parse(text) as unknown) : undefined;
+    } catch {
+      // PayPal edge/HTML error pages are not JSON; keep a snippet for diagnosis.
+      body = { message: text.slice(0, 300) };
+      if (res.ok) throw new PayPalError(`PayPal ${method} ${path} returned non-JSON`, res.status, res.headers.get("paypal-debug-id") ?? undefined, body);
+    }
     if (!res.ok) {
       const b = (body ?? {}) as Record<string, unknown>;
       const issue = Array.isArray(b.details)

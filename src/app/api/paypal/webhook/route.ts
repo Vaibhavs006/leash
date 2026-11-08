@@ -5,11 +5,16 @@ import { configured } from "@/lib/server/env";
 import { json } from "@/lib/server/http";
 import { paypal } from "@/lib/server/paypal";
 
-/** PayPal webhook listener. Unverified events are stored for audit but never acted on. */
+/** PayPal webhook events are small; anything larger is not from PayPal. */
+const MAX_BODY = 64 * 1024;
+
+/** PayPal webhook listener. Unverified events are logged, never stored or acted on. */
 export async function POST(req: Request) {
   let event: PayPalWebhookEvent;
   try {
-    event = (await req.json()) as PayPalWebhookEvent;
+    const raw = await req.text();
+    if (raw.length > MAX_BODY) return json({ error: "Payload too large" }, 413);
+    event = JSON.parse(raw) as PayPalWebhookEvent;
     if (!event?.id || !event?.event_type) return json({ error: "Not a PayPal event" }, 400);
   } catch {
     return json({ error: "Invalid JSON" }, 400);

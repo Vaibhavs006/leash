@@ -34,7 +34,14 @@ const Product = z
       .array(z.object({ url: z.string(), cleaned_url: z.string().nullish(), is_main_image: z.boolean().nullish() }).passthrough())
       .nullish(),
     category: z
-      .object({ slug: z.string().nullish(), title: z.string().nullish(), path: z.union([z.array(z.string()), z.string()]).nullish() })
+      .object({
+        slug: z.string().nullish(),
+        title: z.string().nullish(),
+        // API reference: path is CategoryRef[] ({slug, title}), root first. Strings tolerated defensively.
+        path: z
+          .union([z.array(z.union([z.string(), z.object({ slug: z.string().nullish(), title: z.string().nullish() }).passthrough()])), z.string()])
+          .nullish(),
+      })
       .passthrough()
       .nullish(),
     key_features: z.array(z.string()).nullish(),
@@ -42,7 +49,8 @@ const Product = z
   })
   .passthrough();
 
-const SearchResponse = z.object({ products: z.array(Product) }).passthrough();
+// Products are validated one by one so a single odd record can't fail the whole search.
+const SearchResponse = z.object({ products: z.array(z.unknown()) }).passthrough();
 
 export interface NormalizedProduct {
   id: string;
@@ -67,7 +75,11 @@ export class Channel3Error extends Error {
 
 function categoryTags(cat: z.infer<typeof Product>["category"]): { label: string; tags: string[] } {
   if (!cat) return { label: "uncategorized", tags: [] };
-  const path = Array.isArray(cat.path) ? cat.path : typeof cat.path === "string" ? cat.path.split(/\s*[>/]\s*/) : [];
+  const path: string[] = Array.isArray(cat.path)
+    ? cat.path.flatMap((x) => (typeof x === "string" ? [x] : [x.title, x.slug].filter((v): v is string => !!v)))
+    : typeof cat.path === "string"
+      ? cat.path.split(/\s*[>/]\s*/)
+      : [];
   const tags = [cat.slug, cat.title, ...path]
     .filter((x): x is string => !!x)
     .flatMap((x) => [x, x.replace(/-/g, " ")])
@@ -125,6 +137,8 @@ export async function searchProducts(opts: {
         availability: ["InStock"],
         ...(opts.maxPriceUsd ? { price: { max_price: opts.maxPriceUsd } } : {}),
       },
+      // Leash charges in USD only; ask for US/USD offers explicitly instead of relying on inference.
+      config: { currency: "USD", country: "US" },
     }),
     cache: "no-store",
     signal: AbortSignal.timeout(20_000),
@@ -134,5 +148,19 @@ export async function searchProducts(opts: {
     throw new Channel3Error(`Channel3 search failed (${res.status}): ${text.slice(0, 300)}`, res.status);
   }
   const parsed = SearchResponse.parse(await res.json());
-  return parsed.products.map(normalizeProduct).filter((p): p is NormalizedProduct => p !== null);
+  return parseProducts(parsed.products);
+}
+
+export function parseProducts(raw: unknown[]): NormalizedProduct[] {
+  const out: NormalizedProduct[] = [];
+  for (const r of raw) {
+    const p = Product.safeParse(r);
+    if (!p.success) {
+      console.warn("[channel3] skipped unparseable product", p.error.issues[0]?.path.join("."), p.error.issues[0]?.message);
+      continue;
+    }
+    const n = normalizeProduct(p.data);
+    if (n) out.push(n);
+  }
+  return out;
 }

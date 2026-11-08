@@ -19,7 +19,7 @@ const STATUS: Record<PurchaseStatus, { label: string; tone: Tone }> = {
   refunded: { label: "Refunded", tone: "violet" },
 };
 
-const MODE: Record<string, string> = { vault: "Auto · saved wallet", buyer_approval: "Approved on PayPal" };
+const MODE: Record<string, string> = { vault: "Auto · saved wallet", buyer_approval: "Approved by owner" };
 
 export function Ledger({ purchases, busy, act }: { purchases: PurchaseView[]; busy: string | null; act: Act }) {
   const [open, setOpen] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export function Ledger({ purchases, busy, act }: { purchases: PurchaseView[]; bu
         }
       />
       <div className="grid grid-cols-3 gap-3 px-5 pb-4">
-        <Stat label="Paid via PayPal" value={usd(paid)} />
+        <Stat label={purchases.some((p) => p.simulated) ? "Paid (incl. simulated)" : "Paid via PayPal"} value={usd(paid)} />
         <Stat label="Requests" value={String(purchases.length)} />
         <Stat label="Blocked by policy" value={`${blocked.length} · ${usd(blocked.reduce((s, p) => s + p.totalCents, 0))}`} tone="red" />
       </div>
@@ -75,7 +75,9 @@ export function Ledger({ purchases, busy, act }: { purchases: PurchaseView[]; bu
               return (
                 <Fragment key={p.id}>
                   <tr className={cx("border-b border-slate-100 align-top hover:bg-slate-50/60", expanded && "bg-slate-50/60")}>
-                    <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">{timeAgo(p.createdAt)}</td>
+                    <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500" suppressHydrationWarning>
+                      {timeAgo(p.createdAt)}
+                    </td>
                     <td className="max-w-[280px] px-3 py-3">
                       {p.items.length === 0 && <span className="text-xs text-slate-400">—</span>}
                       {p.items.map((i) => (
@@ -91,6 +93,7 @@ export function Ledger({ purchases, busy, act }: { purchases: PurchaseView[]; bu
                     </td>
                     <td className="px-3 py-3">
                       <Badge tone={s.tone}>{s.label}</Badge>
+                      {p.simulated && <Badge tone="amber" className="ml-1">SIM</Badge>}
                       {p.paymentMode && <p className="mt-1 text-[11px] text-slate-400">{MODE[p.paymentMode]}</p>}
                     </td>
                     <td className="px-3 py-3 font-mono text-[11px] text-slate-500">
@@ -107,7 +110,7 @@ export function Ledger({ purchases, busy, act }: { purchases: PurchaseView[]; bu
                           size="sm"
                           disabled={busy !== null}
                           onClick={() => {
-                            if (!confirm(`Refund ${usd(p.totalCents)} to the PayPal buyer (sandbox)?`)) return;
+                            if (!confirm(p.simulated ? `Refund ${usd(p.totalCents)} (simulated)?` : `Refund ${usd(p.totalCents)} to the PayPal buyer (sandbox)?`)) return;
                             void act(`refund:${p.id}`, async () => void (await api(`/api/purchases/${p.id}/refund`, { method: "POST" })));
                           }}
                         >

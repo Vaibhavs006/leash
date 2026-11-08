@@ -25,7 +25,7 @@ export function ApprovalQueue({ purchases, busy, act, walletConnected }: { purch
                     {i.quantity} × {i.title}
                   </p>
                 ))}
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-slate-500" suppressHydrationWarning>
                   {[...new Set(p.items.map((i) => i.merchant))].join(", ")} · {timeAgo(p.createdAt)}
                 </p>
               </div>
@@ -40,12 +40,19 @@ export function ApprovalQueue({ purchases, busy, act, walletConnected }: { purch
             {p.error && <p className="mt-1 text-[11px] text-rose-700">Last attempt: {p.error}</p>}
             <div className="mt-3 flex gap-2">
               {p.status === "awaiting_payer" ? (
-                <Badge tone="blue">
-                  <Spinner className="h-3 w-3" /> Waiting for PayPal approval
-                </Badge>
+                <>
+                  <Badge tone="blue">
+                    <Spinner className="h-3 w-3" /> Waiting for {p.simulated ? "simulated" : "PayPal"} approval
+                  </Badge>
+                  {p.paypalApproveUrl && (
+                    <a href={p.paypalApproveUrl} className="text-xs font-medium text-teal-700 underline">
+                      Continue
+                    </a>
+                  )}
+                </>
               ) : (
                 <Button
-                  variant="paypal"
+                  variant={p.simulated ? "primary" : "paypal"}
                   size="sm"
                   disabled={busy !== null}
                   onClick={() =>
@@ -53,11 +60,12 @@ export function ApprovalQueue({ purchases, busy, act, walletConnected }: { purch
                       const r = await api<{ approveUrl: string | null; purchase: PurchaseView }>(`/api/purchases/${p.id}/approve`, { method: "POST" });
                       if (r.approveUrl) window.location.href = r.approveUrl;
                       else if (r.purchase.status === "denied") throw new Error(`No longer allowed: ${r.purchase.reasons.join("; ")}`);
+                      else if (r.purchase.error) throw new Error(r.purchase.error);
                     })
                   }
                 >
                   {busy === `approve:${p.id}` ? <Spinner /> : null}
-                  Approve &amp; pay with PayPal
+                  {p.simulated ? "Approve (simulated payment)" : <>Approve &amp; pay with PayPal</>}
                 </Button>
               )}
               <Button
@@ -73,7 +81,7 @@ export function ApprovalQueue({ purchases, busy, act, walletConnected }: { purch
         ))}
         {!walletConnected && (
           <p className="rounded-lg bg-slate-50 p-2.5 text-[11px] text-slate-500">
-            No PayPal wallet saved yet, so every purchase needs approval. Connect a wallet to let in-policy purchases go through automatically.
+            No wallet saved yet, so every purchase needs approval. Connect a wallet (top right) to let in-policy purchases go through automatically.
           </p>
         )}
       </div>

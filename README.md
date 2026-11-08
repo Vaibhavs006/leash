@@ -94,31 +94,51 @@ npm run db:migrate
 npm run dev                       # http://localhost:3000
 ```
 
-Keys:
+### Setup: API keys
 
-- **PayPal sandbox:** [developer.paypal.com](https://developer.paypal.com) → Apps & Credentials (Sandbox) → your app → copy the Client ID and Secret. In the app's features, make sure **Vault** is enabled under Accept payments → Advanced options.
-- **Anthropic:** console.anthropic.com → API keys.
-- **Channel3:** trychannel3.com/developers (hackathon promo code `PAYPAL-HACKATHON-2026`).
+All three integrations are **optional**. Any integration without keys runs as a clearly labelled **offline simulator**, so the whole app works with no keys at all. Each integration switches to live independently as soon as its keys are in `.env.local` (restart `npm run dev` after editing).
 
-Without keys the app still runs: it shows exactly which keys are missing, and the policy engine, ledger and hijack simulation work.
+| Integration | Where to get the key | `.env.local` variables | Without it |
+|---|---|---|---|
+| **PayPal sandbox** (payments) | [developer.paypal.com](https://developer.paypal.com) → log in → **Apps & Credentials** → select **Sandbox** → **Create App** (Merchant) → copy **Client ID** and **Secret**. In the app's settings under **Accept payments → Advanced options**, enable **Vault**. Sandbox buyer/business test accounts are under **Testing Tools → Sandbox Accounts**. | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` (+ `PAYPAL_WEBHOOK_ID` on the deployed site) | Offline payment simulator: `SIM-` ids, approvals on Leash's own labelled simulator page, no money |
+| **Anthropic** (the agent) | [console.anthropic.com](https://console.anthropic.com) → **Settings → API keys** → **Create key** | `ANTHROPIC_API_KEY` (optional `ANTHROPIC_MODEL`, default `claude-sonnet-5-5`) | Rule-based planner (not an LLM) running through the same agent loop and tools |
+| **Channel3** (product search) | [trychannel3.com/developers](https://trychannel3.com/developers) → sign up → copy the key from the dashboard. Hackathon promo code `PAYPAL-HACKATHON-2026` = 20,000 free searches | `CHANNEL3_API_KEY` | Simulated catalog of 32 café products from fictional `.example` merchants |
 
-### Verify the PayPal sandbox flows end to end
+The header banner and every timeline/ledger entry show which parts are live and which are simulated. Set `DEMO_MODE=off` to disable the simulators instead: integrations without keys then return a clear 503 naming the missing variable, and the app still never crashes.
+
+### What's live vs. simulated
+
+| Feature | Live (with keys) | Offline demo (no keys) |
+|---|---|---|
+| Policy engine, budget locking, audit ledger, rule trace | Same code | Same code |
+| Product search | Channel3 `POST /v1/search` | Keyword search over a fixed simulated catalog |
+| Agent | Claude via AI SDK tool loop | Deterministic planner via the same tool loop (red-team mode makes it obey injected listings) |
+| Saved wallet | PayPal Vault v3 setup and payment tokens | Simulated token (`SIM-VAULT-…`) |
+| Auto purchases | Orders v2 charge with `vault_id` | Simulated capture (`SIM-ORDER-…`) |
+| Approval | PayPal checkout (`payer-action`) → capture | Leash "Offline payment simulator" page → capture |
+| Refunds | Payments v2 refund | Simulated refund |
+| Webhooks | Signature-verified reconciliation | Not applicable |
+
+A simulated wallet never pays a live purchase and the simulator refuses real PayPal ids, so the two worlds can't mix if you add keys later.
+
+### Verify each live integration once you have keys
 
 ```bash
-npm run spike:paypal
+npm run spike:paypal      # PayPal: OAuth, Vault, MIT charge, idempotency, buyer approval, capture, refund
+npm run check:channel3    # Channel3: prints the raw response shape and what Leash parsed
 ```
 
-This proves OAuth → Vault setup token → buyer approval → payment token → merchant-initiated charge → idempotent retry → buyer-approved order → capture → refund, printing PASS/FAIL for each. The two approval steps open PayPal; log in as your **sandbox personal (buyer)** account.
+`spike:paypal` prints PASS/FAIL for each step. The two approval steps open PayPal; log in as your **sandbox personal (buyer)** account. For Claude, run any goal in the dashboard: the timeline shows `agent: live`.
 
 ### Tests
 
 ```bash
-npm test          # policy engine, money conversion, Channel3 normalisation (unit)
-npm run test:int  # purchase service, agent loop, webhooks against real Postgres
+npm test          # policy engine, money, Channel3 parsing, simulated catalog and planner (unit)
+npm run test:int  # purchase service, agent loop, webhooks, full offline demo flows (real Postgres)
 npm run typecheck && npm run lint
 ```
 
-The agent loop is tested with a scripted mock model, fake search and fake PayPal against real Postgres, including the red-team case.
+Integration tests use real Postgres. The agent loop is exercised with a scripted mock model and with the rule-based planner; PayPal, Claude and Channel3 are faked or simulated in tests, so **passing tests do not prove the live APIs work**. That's what the two commands above are for.
 
 ## Deploy (Render)
 
@@ -142,6 +162,8 @@ src/lib/paypal/                typed PayPal REST client (Orders, Vault, refunds,
 src/lib/agent/run.ts           Claude tool loop (search_products, request_purchase)
 src/lib/agent/redteam.ts       labelled attack fixtures
 src/lib/channel3.ts            Channel3 search + normalisation
+src/lib/demo/                  offline simulators: catalog, rule-based planner, payment gateway
+src/app/demo/approve/          offline payment simulator page (only active without PayPal keys)
 src/app/api/                   route handlers
 src/components/                dashboard UI
 scripts/paypal-spike.ts        end-to-end sandbox verification

@@ -19,7 +19,7 @@ export function defaultMandate(workspaceId: string) {
     maxItemQuantity: 6,
     allowedCategories: ["coffee", "tea", "food", "grocery", "beverages", "cafe supplies", "kitchen", "cleaning", "paper", "disposable"],
     allowedMerchants: [] as string[],
-    blockedMerchants: ["bulk-deals-direct.shop"],
+    blockedMerchants: ["bulk-deals-direct.example"],
     expiresAt: new Date(Date.now() + 7 * 86400_000),
   };
 }

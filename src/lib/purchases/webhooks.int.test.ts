@@ -47,10 +47,11 @@ afterAll(async () => {
 const get = async () => (await db.select().from(schema.purchases).where(eq(schema.purchases.id, purchaseId)))[0];
 
 describe("handleWebhookEvent", () => {
-  it("ignores unverified events but records them", async () => {
+  it("ignores unverified events without storing them", async () => {
     const out = await handleWebhookEvent(db, { id: "EV0", event_type: "PAYMENT.CAPTURE.COMPLETED", resource: { id: "CAP1" } }, false);
     expect(out).toBe("ignored");
     expect((await get()).status).toBe("awaiting_payer");
+    expect(await db.select().from(schema.webhookEvents).where(eq(schema.webhookEvents.id, "EV0"))).toHaveLength(0);
   });
 
   it("marks a purchase captured by order id, and dedupes redelivery", async () => {

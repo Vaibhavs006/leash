@@ -96,8 +96,18 @@ export interface RequestPurchaseResult {
 
 export async function requestPurchase(
   deps: ServiceDeps,
-  args: { workspaceId: string; mandateId: string; runId: string; items: ProposedItem[]; agentReason: string; idempotencyKey: string },
+  args: {
+    workspaceId: string;
+    mandateId: string;
+    runId: string;
+    items: ProposedItem[];
+    agentReason: string;
+    idempotencyKey: string;
+    /** True when payments run through the offline simulator. */
+    simulated?: boolean;
+  },
 ): Promise<RequestPurchaseResult> {
+  const simulated = !!args.simulated;
   const now = deps.now?.() ?? new Date();
 
   const { purchase, policy, vaultId } = await deps.db.transaction(async (tx) => {
@@ -114,12 +124,14 @@ export async function requestPurchase(
     const [ws] = await tx.select().from(workspaces).where(eq(workspaces.id, args.workspaceId));
 
     const inputs = await policyContextInputs(tx, m.id, args.runId, now);
+    // A simulated wallet only pays simulated purchases, and a real one only real purchases.
+    const usableVaultId = ws?.vaultId && ws.walletSimulated === simulated ? ws.vaultId : null;
     const policy = evaluatePurchase(toMandate(m), args.items, {
       now,
       spentCents: inputs.spentCents,
       pendingCents: inputs.pendingCents,
       recentProductIds: inputs.recentProductIds,
-      hasVaultedWallet: !!ws?.vaultId,
+      hasVaultedWallet: !!usableVaultId,
       catalog: inputs.catalog,
     });
 
@@ -155,9 +167,10 @@ export async function requestPurchase(
         reasons: policy.reasons,
         agentReason: args.agentReason.slice(0, 2000),
         idempotencyKey: args.idempotencyKey,
+        simulated,
       })
       .returning();
-    return { purchase: row, policy, vaultId: ws?.vaultId ?? null };
+    return { purchase: row, policy, vaultId: usableVaultId };
   });
 
   if (policy.decision !== "AUTO_APPROVE" || !vaultId) return { purchase, policy };
@@ -271,7 +284,7 @@ export async function approvePurchase(
       returnUrl: `${deps.appUrl}/api/paypal/return?purchase=${p.id}`,
       cancelUrl: `${deps.appUrl}/api/paypal/cancel?purchase=${p.id}`,
     });
-    const row = await update(deps, p.id, { paypalOrderId: order.orderId });
+    const row = await update(deps, p.id, { paypalOrderId: order.orderId, paypalApproveUrl: order.approveUrl, error: null });
     return { purchase: row, approveUrl: order.approveUrl };
   } catch (e) {
     const err = e as { message?: string; debugId?: string };
@@ -291,21 +304,26 @@ export async function completeBuyerApproval(deps: ServiceDeps, purchaseId: strin
   try {
     const r = await deps.gateway.captureOrder(orderId);
     const ok = r.status === "COMPLETED" && r.captureStatus === "COMPLETED";
-    return update(deps, p.id, {
-      status: ok ? "captured" : "failed",
-      paypalCaptureId: r.captureId,
-      error: ok ? null : `PayPal returned ${r.status}/${r.captureStatus ?? "no capture"}`,
-    });
+    if (ok) return update(deps, p.id, { status: "captured", paypalCaptureId: r.captureId, paypalApproveUrl: null, error: null });
+    if (r.captureStatus === "PENDING") return update(deps, p.id, { paypalCaptureId: r.captureId, error: "Capture pending at PayPal; waiting for webhook" });
+    return backToQueue(deps, p.id, `PayPal returned ${r.status}/${r.captureStatus ?? "no capture"}`);
   } catch (e) {
+    // E.g. ORDER_NOT_APPROVED (return URL hit without approving) or INSTRUMENT_DECLINED.
+    // Don't mark the purchase failed: return it to the owner's queue (budget stays reserved)
+    // so they can retry with a fresh PayPal order or reject it.
     const err = e as { message?: string; debugId?: string };
-    return update(deps, p.id, { status: "failed", error: err.message ?? String(e), paypalDebugId: err.debugId });
+    return backToQueue(deps, p.id, err.message ?? String(e), err.debugId);
   }
+}
+
+function backToQueue(deps: ServiceDeps, id: string, error: string, debugId?: string) {
+  return update(deps, id, { status: "pending_approval", paypalOrderId: null, paypalApproveUrl: null, error, paypalDebugId: debugId ?? null });
 }
 
 export async function cancelBuyerApproval(deps: ServiceDeps, purchaseId: string): Promise<Purchase | null> {
   const rows = await deps.db
     .update(purchases)
-    .set({ status: "pending_approval", paypalOrderId: null, updatedAt: new Date() })
+    .set({ status: "pending_approval", paypalOrderId: null, paypalApproveUrl: null, updatedAt: new Date() })
     .where(and(eq(purchases.id, purchaseId), eq(purchases.status, "awaiting_payer")))
     .returning();
   return rows[0] ?? null;

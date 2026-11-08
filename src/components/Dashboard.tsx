@@ -13,11 +13,11 @@ export interface Toast {
   text: string;
 }
 
-const MISSING_HELP: Record<string, string> = {
-  paypal: "PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET",
-  anthropic: "ANTHROPIC_API_KEY",
-  channel3: "CHANNEL3_API_KEY",
-};
+const MODE_LABELS = {
+  catalog: { live: "Channel3 live search", simulated: "Simulated catalog", unavailable: "Search unavailable" },
+  agent: { live: "Claude", simulated: "Rule-based planner (no LLM)", unavailable: "Agent unavailable" },
+  payments: { live: "PayPal sandbox", simulated: "Offline payment simulator", unavailable: "Payments unavailable" },
+} as const;
 
 export function Dashboard({ initialNotice, initialState }: { initialNotice: Toast | null; initialState: State | null }) {
   const [state, setState] = useState<State | null>(initialState);
@@ -95,7 +95,6 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
     );
   }
 
-  const missing = (["paypal", "anthropic", "channel3"] as const).filter((k) => !state.integrations[k]);
   const mandate = state.mandates.find((m) => m.status !== "revoked") ?? state.mandates[0];
   const pending = state.purchases.filter((p) => p.status === "pending_approval" || p.status === "awaiting_payer");
 
@@ -107,7 +106,7 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold tracking-tight">Leash</span>
-              <Badge tone="violet">Sandbox</Badge>
+              {state.modes.payments === "live" ? <Badge tone="violet">PayPal Sandbox</Badge> : <Badge tone="amber">Offline demo</Badge>}
             </div>
             <p className="hidden truncate text-xs text-slate-500 sm:block">Spending controls for AI purchasing agents · {state.workspace.businessName}</p>
           </div>
@@ -133,14 +132,9 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
       </header>
 
       <main className="mx-auto max-w-7xl space-y-5 px-4 py-5 sm:px-6">
-        {missing.length > 0 && (
-          <div className="card border-amber-200 bg-amber-50/60 px-5 py-3 text-sm text-amber-900">
-            <span className="font-medium">Setup incomplete.</span> Missing {missing.map((m) => MISSING_HELP[m]).join(", ")}. Live agent runs and payments are disabled until
-            these are set; the policy engine, ledger and the hijack simulation still work.
-          </div>
-        )}
+        <ModeBanner state={state} />
 
-        <Hero />
+        <Hero modes={state.modes} />
 
         <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
           <div className="space-y-5">
@@ -161,7 +155,10 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
         <Ledger purchases={state.purchases} busy={busy} act={act} />
 
         <footer className="pb-8 pt-2 text-center text-xs text-slate-400">
-          Sandbox demo. Leash acts as merchant of record in the PayPal sandbox; no real orders are placed with retailers. Product data from Channel3.
+          {state.modes.payments === "live"
+            ? "PayPal sandbox: Leash acts as merchant of record; no real orders are placed with retailers."
+            : "Offline demo: payments are simulated and no money moves."}{" "}
+          {state.modes.catalog === "live" ? "Product data from Channel3." : "Products come from a simulated catalog (.example merchants)."}
         </footer>
       </main>
 
@@ -184,14 +181,21 @@ export function Dashboard({ initialNotice, initialState }: { initialNotice: Toas
   );
 }
 
-function Hero() {
+function Hero({ modes }: { modes: State["modes"] }) {
+  const agent = modes.agent === "live" ? "Claude" : "The agent (offline: a rule-based planner)";
+  const where = modes.catalog === "live" ? "real products" : "a simulated catalog";
+  const pays = modes.payments === "live" ? "PayPal" : "the payment simulator";
   return (
     <section className="card overflow-hidden">
       <div className="grid gap-4 bg-gradient-to-br from-white via-white to-teal-50/70 p-5 sm:grid-cols-3 sm:p-6">
         {[
           { k: "1", t: "You set a mandate", d: "Budget, caps, categories and blocked merchants, written once." },
-          { k: "2", t: "The agent shops", d: "Claude searches real products and proposes carts. It never touches payment credentials." },
-          { k: "3", t: "Leash decides, PayPal pays", d: "Small in-policy carts charge your saved wallet. Bigger ones need your approval on PayPal. Everything else is blocked." },
+          { k: "2", t: "The agent shops", d: `${agent} searches ${where} and proposes carts. It never touches payment credentials.` },
+          {
+            k: "3",
+            t: modes.payments === "live" ? "Leash decides, PayPal pays" : "Leash decides, then pays",
+            d: `Small in-policy carts charge your saved wallet via ${pays}. Bigger ones need your approval. Everything else is blocked.`,
+          },
         ].map((s) => (
           <div key={s.k} className="flex gap-3">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-semibold text-white">{s.k}</span>
@@ -210,13 +214,16 @@ function WalletPill({ state, busy, act }: { state: State; busy: string | null; a
   if (state.workspace.walletConnected) {
     return (
       <div className="hidden items-center gap-2 sm:flex">
-        <Badge tone="green">● PayPal wallet saved{state.workspace.payerEmail ? ` · ${state.workspace.payerEmail}` : ""}</Badge>
+        <Badge tone="green">
+          ● {state.workspace.walletSimulated ? "Simulated wallet saved" : "PayPal wallet saved"}
+          {state.workspace.payerEmail ? ` · ${state.workspace.payerEmail}` : ""}
+        </Badge>
         <Button
           variant="ghost"
           size="sm"
           disabled={busy !== null}
           onClick={() => {
-            if (!confirm("Remove the saved PayPal wallet? Agent purchases will then all need approval on PayPal.")) return;
+            if (!confirm("Remove the saved wallet? Agent purchases will then all need your approval.")) return;
             void act("wallet", async () => {
               await api("/api/wallet/disconnect", { method: "POST" });
             });
@@ -229,10 +236,16 @@ function WalletPill({ state, busy, act }: { state: State; busy: string | null; a
   }
   return (
     <Button
-      variant="paypal"
+      variant={state.modes.payments === "live" ? "paypal" : "secondary"}
       size="sm"
-      disabled={busy !== null || !state.integrations.paypal}
-      title={state.integrations.paypal ? "Save a PayPal wallet the agent can charge within your mandate" : "PayPal is not configured"}
+      disabled={busy !== null || state.modes.payments === "unavailable"}
+      title={
+        state.modes.payments === "live"
+          ? "Save a PayPal wallet the agent can charge within your mandate"
+          : state.modes.payments === "simulated"
+            ? "Save a simulated wallet (offline demo, no PayPal, no money)"
+            : "PayPal is not configured"
+      }
       onClick={() =>
         void act("wallet", async () => {
           const { approveUrl } = await api<{ approveUrl: string }>("/api/wallet/connect", { method: "POST" });
@@ -241,8 +254,33 @@ function WalletPill({ state, busy, act }: { state: State; busy: string | null; a
       }
     >
       {busy === "wallet" ? <Spinner /> : null}
-      <span className="sm:hidden">Connect PayPal</span>
-      <span className="hidden sm:inline">Connect PayPal wallet</span>
+      <span className="sm:hidden">{state.modes.payments === "live" ? "Connect PayPal" : "Connect wallet"}</span>
+      <span className="hidden sm:inline">{state.modes.payments === "live" ? "Connect PayPal wallet" : "Connect wallet (simulated)"}</span>
     </Button>
+  );
+}
+
+function ModeBanner({ state }: { state: State }) {
+  const entries = (["catalog", "agent", "payments"] as const).map((k) => ({ k, mode: state.modes[k] }));
+  const unavailable = entries.filter((e) => e.mode === "unavailable");
+  const simulated = entries.filter((e) => e.mode === "simulated");
+  if (!unavailable.length && !simulated.length) return null;
+  return (
+    <div className={cx("card px-5 py-3 text-sm", unavailable.length ? "border-rose-200 bg-rose-50/60 text-rose-900" : "border-amber-200 bg-amber-50/60 text-amber-900")}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{unavailable.length ? "Setup incomplete." : "Offline demo mode."}</span>
+        {entries.map(({ k, mode }) => (
+          <Badge key={k} tone={mode === "live" ? "green" : mode === "simulated" ? "amber" : "red"}>
+            {mode === "live" ? "● " : mode === "simulated" ? "◐ " : "✕ "}
+            {MODE_LABELS[k][mode]}
+          </Badge>
+        ))}
+      </div>
+      <p className="mt-1 text-xs opacity-80">
+        {unavailable.length
+          ? "Some integrations are missing keys and DEMO_MODE=off, so those features are disabled. See README → Setup."
+          : "Simulated parts are labelled everywhere and never call external APIs or move money. Add the API keys in .env.local to switch each part to live. See README → Setup."}
+      </p>
+    </div>
   );
 }

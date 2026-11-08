@@ -32,7 +32,8 @@ export function AgentConsole({
 }) {
   const [goal, setGoal] = useState(SUGGESTIONS[0]);
   const [redTeam, setRedTeam] = useState(false);
-  const liveReady = state.integrations.anthropic && state.integrations.channel3 && state.integrations.paypal;
+  const available = state.modes.agent !== "unavailable" && state.modes.catalog !== "unavailable" && state.modes.payments !== "unavailable";
+  const simAgent = state.modes.agent === "simulated";
   const shownRunId = activeRunId ?? state.runs[0]?.id ?? null;
   const running = state.runs.some((r) => r.status === "running");
 
@@ -40,8 +41,12 @@ export function AgentConsole({
     <section className="card flex min-h-[560px] flex-col">
       <SectionTitle
         title="Agent"
-        hint="Claude, with two tools: search products and request a purchase"
-        right={<Badge tone="gray">{state.workspace.runsUsed} runs used</Badge>}
+        hint={
+          simAgent
+            ? "Simulated rule-based planner (no LLM), with the same two tools Claude gets"
+            : "Claude, with two tools: search products and request a purchase"
+        }
+        right={simAgent ? <Badge tone="amber">simulated agent</Badge> : <Badge tone="gray">{state.workspace.runsUsed} live runs used</Badge>}
       />
       <div className="space-y-3 px-5">
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 focus-within:border-brand focus-within:ring-2 focus-within:ring-teal-100">
@@ -64,8 +69,8 @@ export function AgentConsole({
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button
-            disabled={!mandate || busy !== null || running || goal.trim().length < 5 || !liveReady}
-            title={liveReady ? undefined : "Configure PayPal, Anthropic and Channel3 keys to run the live agent"}
+            disabled={!mandate || busy !== null || running || goal.trim().length < 5 || !available}
+            title={available ? undefined : "Some integrations are unavailable (missing keys with DEMO_MODE=off)"}
             onClick={() =>
               void act("run", async () => {
                 const run = await api<RunView>("/api/runs", { method: "POST", body: JSON.stringify({ mandateId: mandate!.id, goal, redTeam }) });
@@ -78,7 +83,7 @@ export function AgentConsole({
           </Button>
           <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
             <input type="checkbox" checked={redTeam} onChange={(e) => setRedTeam(e.target.checked)} className="h-4 w-4 accent-rose-600" />
-            Red-team: plant a malicious listing in search results
+            {simAgent ? "Red-team: plant a malicious listing (the simulated agent will obey it)" : "Red-team: plant a malicious listing in search results"}
           </label>
           <Button
             variant="danger"
@@ -202,6 +207,15 @@ function EventRow({ e }: { e: EventView }) {
         <Row icon="◎" tone="gray">
           <span className="text-slate-600">{String(d.message)}</span>
           {d.redTeam ? <Badge tone="red" className="ml-2">red-team</Badge> : null}
+          {d.modes ? (
+            <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
+              {Object.entries(d.modes as Record<string, string>).map(([k, v]) => (
+                <Badge key={k} tone={v === "live" ? "green" : "amber"}>
+                  {k}: {v}
+                </Badge>
+              ))}
+            </span>
+          ) : null}
         </Row>
       );
     case "thinking":
@@ -290,7 +304,9 @@ function EventRow({ e }: { e: EventView }) {
     case "payment":
       return d.status === "captured" ? (
         <Row icon="$" tone="green">
-          <span className="font-medium text-emerald-800">Charged saved PayPal wallet</span>
+          <span className="font-medium text-emerald-800">
+            {String(d.paypalOrderId ?? "").startsWith("SIM-") ? "Charged saved wallet (simulated, no money moved)" : "Charged saved PayPal wallet"}
+          </span>
           <span className="ml-2 font-mono text-[11px] text-slate-500">order {String(d.paypalOrderId)}</span>
         </Row>
       ) : (

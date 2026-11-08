@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeProduct } from "./channel3";
+import { normalizeProduct, parseProducts } from "./channel3";
 
 const base = {
   id: "abc",
@@ -37,5 +37,22 @@ describe("normalizeProduct", () => {
   it("avoids float rounding errors", () => {
     const p = normalizeProduct({ ...base, offers: [{ url: "u", domain: "a.com", price: { price: 19.99, currency: "USD" } }] });
     expect(p?.priceCents).toBe(1999);
+  });
+
+  it("parses the documented API shape: CategoryRef objects in path, price.price", () => {
+    const raw = {
+      id: "p1",
+      title: "Espresso Beans",
+      offers: [{ url: "u", domain: "shop.com", price: { price: 12.5, compare_at_price: null, currency: "USD" }, availability: "InStock" }],
+      category: { slug: "coffee-beans", title: "Coffee Beans", path: [{ slug: "food", title: "Food" }, { slug: "coffee-beans", title: "Coffee Beans" }], has_children: false },
+    };
+    const [p] = parseProducts([raw]);
+    expect(p).toMatchObject({ priceCents: 1250, merchant: "shop.com", category: "Coffee Beans" });
+    expect(p.categoryTags).toEqual(expect.arrayContaining(["food", "coffee-beans", "coffee beans"]));
+  });
+
+  it("skips malformed products instead of failing the whole search", () => {
+    const good = { id: "g", title: "Good", offers: [{ url: "u", domain: "a.com", price: { price: 1, currency: "USD" }, availability: "InStock" }] };
+    expect(parseProducts([{ nope: true }, good]).map((p) => p.id)).toEqual(["g"]);
   });
 });

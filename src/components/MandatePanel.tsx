@@ -35,7 +35,9 @@ export function MandatePanel({ mandate: m, busy, act, notify }: { mandate: Manda
         <div>
           <div className="flex items-baseline justify-between">
             <span className="text-2xl font-semibold tabular-nums tracking-tight">{usd(remaining)}</span>
-            <span className="text-xs text-slate-500">left of {usd(m.budgetCents)} · {daysLeft}d</span>
+            <span className="text-xs text-slate-500" suppressHydrationWarning>
+              left of {usd(m.budgetCents)} · {daysLeft}d
+            </span>
           </div>
           <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-slate-100" role="img" aria-label={`${usd(m.spentCents)} spent, ${usd(m.pendingCents)} pending`}>
             <div className="bg-brand transition-all" style={{ width: `${spentPct}%` }} />
@@ -51,7 +53,7 @@ export function MandatePanel({ mandate: m, busy, act, notify }: { mandate: Manda
           <Limit label="Auto-pay up to" value={usd(m.autoApproveLimitCents)} tone="green" />
           <Limit label="Hard cap per purchase" value={usd(m.perPurchaseCapCents)} tone="red" />
           <Limit label="Max units per item" value={String(m.maxItemQuantity)} />
-          <Limit label="Expires" value={new Date(m.expiresAt).toLocaleDateString()} />
+          <Limit label="Expires" value={new Date(m.expiresAt).toLocaleDateString("en-US", { timeZone: "UTC" })} />
         </dl>
 
         <ChipRow label="Allowed categories" items={m.allowedCategories} empty="Any category" />
@@ -87,7 +89,9 @@ function Limit({ label, value, tone }: { label: string; value: string; tone?: "g
   return (
     <div className="rounded-xl bg-slate-50 px-3 py-2">
       <dt className="text-[11px] text-slate-500">{label}</dt>
-      <dd className={cx("mt-0.5 font-semibold tabular-nums", tone === "green" && "text-emerald-700", tone === "red" && "text-rose-700")}>{value}</dd>
+      <dd className={cx("mt-0.5 font-semibold tabular-nums", tone === "green" && "text-emerald-700", tone === "red" && "text-rose-700")} suppressHydrationWarning>
+        {value}
+      </dd>
     </div>
   );
 }

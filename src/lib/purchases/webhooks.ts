@@ -31,13 +31,19 @@ function captureIdFromRefund(ev: PayPalWebhookEvent): string | undefined {
 }
 
 export async function handleWebhookEvent(db: DB, ev: PayPalWebhookEvent, verified: boolean): Promise<WebhookOutcome> {
+  // Unverified events are never stored or acted on: anyone can POST to a public URL.
+  if (!verified) return "ignored";
+  // Record + apply atomically: if applying fails, the event isn't marked seen, so PayPal's retry is processed.
+  return db.transaction((tx) => apply(tx as unknown as DB, ev));
+}
+
+async function apply(db: DB, ev: PayPalWebhookEvent): Promise<WebhookOutcome> {
   const inserted = await db
     .insert(webhookEvents)
-    .values({ id: ev.id, eventType: ev.event_type, resourceId: ev.resource?.id ?? null, verified, payload: ev })
+    .values({ id: ev.id, eventType: ev.event_type, resourceId: ev.resource?.id ?? null, verified: true, payload: ev })
     .onConflictDoNothing()
     .returning({ id: webhookEvents.id });
   if (!inserted.length) return "duplicate";
-  if (!verified) return "ignored";
 
   const r = ev.resource ?? {};
   const now = new Date();

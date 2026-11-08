@@ -7,7 +7,7 @@ export function timeAgo(iso: string | Date): string {
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(iso).toLocaleDateString("en-US", { timeZone: "UTC" });
 }
 
 export const RULE_LABELS: Record<string, string> = {
@@ -35,11 +35,19 @@ export function daysUntil(iso: string | Date): number {
 export function noticeFromParams(q: Record<string, string | string[] | undefined>): { tone: "green" | "red" | "amber"; text: string } | null {
   const g = (k: string) => (Array.isArray(q[k]) ? q[k]?.[0] : q[k]) as string | undefined;
   const err = g("error")?.slice(0, 200);
-  if (g("wallet") === "connected") return { tone: "green", text: "PayPal wallet saved. The agent can now pay for in-policy purchases automatically." };
+  const sim = g("sim") === "1";
+  if (g("wallet") === "connected")
+    return {
+      tone: "green",
+      text: sim
+        ? "Simulated wallet saved (offline demo, no PayPal). The agent can now pay for in-policy purchases automatically."
+        : "PayPal wallet saved. The agent can now pay for in-policy purchases automatically.",
+    };
   if (g("wallet") === "error") return { tone: "red", text: `Could not save PayPal wallet: ${err ?? "unknown error"}` };
   if (g("wallet") === "cancelled") return { tone: "amber", text: "Wallet connection cancelled." };
-  if (g("paid") === "1") return { tone: "green", text: "Approved on PayPal and captured. The ledger is updated." };
+  if (g("paid") === "1")
+    return { tone: "green", text: sim ? "Approved and captured (simulated payment, no money moved). The ledger is updated." : "Approved on PayPal and captured. The ledger is updated." };
   if (g("paid") === "0") return { tone: "red", text: `Payment not completed: ${err ?? "PayPal did not capture the order"}` };
-  if (g("cancelled") === "1") return { tone: "amber", text: "PayPal approval cancelled. The purchase is back in your approval queue." };
+  if (g("cancelled") === "1") return { tone: "amber", text: "Approval cancelled. The purchase is back in your approval queue." };
   return null;
 }

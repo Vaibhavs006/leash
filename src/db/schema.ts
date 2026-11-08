@@ -21,6 +21,8 @@ export const workspaces = pgTable("workspaces", {
   vaultId: text("vault_id"),
   payerEmail: text("payer_email"),
   pendingSetupTokenId: text("pending_setup_token_id"),
+  /** True when the saved wallet came from the offline payment simulator. */
+  walletSimulated: boolean("wallet_simulated").notNull().default(false),
   runsUsed: integer("runs_used").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -48,6 +50,9 @@ export const runs = pgTable("runs", {
   mandateId: uuid("mandate_id").notNull().references(() => mandates.id, { onDelete: "cascade" }),
   goal: text("goal").notNull(),
   redTeam: boolean("red_team").notNull().default(false),
+  /** Which adapters ran: "live" (real API) or "simulated" (offline demo). */
+  agentMode: text("agent_mode", { enum: ["live", "simulated"] }).notNull().default("live"),
+  catalogMode: text("catalog_mode", { enum: ["live", "simulated"] }).notNull().default("live"),
   status: text("status", { enum: ["running", "completed", "failed"] }).notNull().default("running"),
   summary: text("summary"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -129,6 +134,10 @@ export const purchases = pgTable(
     paypalCaptureId: text("paypal_capture_id"),
     paypalRefundId: text("paypal_refund_id"),
     paypalDebugId: text("paypal_debug_id"),
+    /** Buyer-approval link, so an abandoned approval can be resumed. */
+    paypalApproveUrl: text("paypal_approve_url"),
+    /** True when payment ran through the offline simulator (no PayPal call, no money). */
+    simulated: boolean("simulated").notNull().default(false),
     error: text("error"),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

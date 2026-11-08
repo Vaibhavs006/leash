@@ -29,4 +29,8 @@ body {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
-.animate-in { animation: leash-in 0.25s ease-out both; }
+/* No backwards fill: if animations are paused (background tab, screen capture), content stays visible. */
+.animate-in { animation: leash-in 0.25s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-in { animation: none; }
+}

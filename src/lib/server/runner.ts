@@ -7,17 +7,25 @@ import { mandates, runs, workspaces, type Workspace } from "@/db/schema";
 import { executeRun, logEvent } from "@/lib/agent/run";
 import { hijackedCart, injectedListing } from "@/lib/agent/redteam";
 import { searchProducts } from "@/lib/channel3";
-import { paypalGateway } from "@/lib/purchases/gateway";
+import { simulatedSearch } from "@/lib/demo/catalog";
+import { createRuleBasedPlanner } from "@/lib/demo/planner";
 import { decisiveFailures } from "@/lib/policy/engine";
 import { recordCatalog, requestPurchase } from "@/lib/purchases/service";
-import { anthropicModelId, appUrl, maxRunsPerWorkspace, requireConfig } from "./env";
+import { anthropicModelId, appUrl, maxRunsPerWorkspace } from "./env";
+import { modes, requireMode } from "./modes";
+import { currentPayments, gatewayFor } from "./payments";
 
 export class RunLimitError extends Error {}
 
-/** Agent runs are capped at 12 model steps; anything older than this was interrupted. */
+/** Agent runs are capped at 12 model steps / 4 minutes; anything older than this was interrupted. */
 const STALE_RUN_MS = 5 * 60 * 1000;
 
-async function reserveRun(ws: Workspace, mandateId: string, goal: string, redTeam: boolean) {
+async function reserveRun(
+  ws: Workspace,
+  mandateId: string,
+  goal: string,
+  opts: { redTeam: boolean; agentMode: "live" | "simulated"; catalogMode: "live" | "simulated" },
+) {
   const [m] = await db.select().from(mandates).where(and(eq(mandates.id, mandateId), eq(mandates.workspaceId, ws.id)));
   if (!m) throw new Error("Mandate not found");
   // A run interrupted by a redeploy/crash would stay "running" forever; expire it.
@@ -27,45 +35,57 @@ async function reserveRun(ws: Workspace, mandateId: string, goal: string, redTea
     .where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running"), lt(runs.createdAt, new Date(Date.now() - STALE_RUN_MS))));
   const active = await db.select({ id: runs.id }).from(runs).where(and(eq(runs.workspaceId, ws.id), eq(runs.status, "running")));
   if (active.length) throw new RunLimitError("An agent run is already in progress.");
-  // Atomic quota increment protects the public demo's AI bill.
-  const bumped = await db
-    .update(workspaces)
-    .set({ runsUsed: sql`${workspaces.runsUsed} + 1` })
-    .where(and(eq(workspaces.id, ws.id), sql`${workspaces.runsUsed} < ${maxRunsPerWorkspace()}`))
-    .returning({ id: workspaces.id });
-  if (!bumped.length) throw new RunLimitError(`Demo limit reached (${maxRunsPerWorkspace()} agent runs per visitor). Open the app in a private window for a fresh demo workspace.`);
-  const [run] = await db.insert(runs).values({ workspaceId: ws.id, mandateId, goal: goal.slice(0, 500), redTeam }).returning();
+  // Atomic quota on live LLM runs protects the public demo's AI bill. Simulated runs are free.
+  if (opts.agentMode === "live") {
+    const bumped = await db
+      .update(workspaces)
+      .set({ runsUsed: sql`${workspaces.runsUsed} + 1` })
+      .where(and(eq(workspaces.id, ws.id), sql`${workspaces.runsUsed} < ${maxRunsPerWorkspace()}`))
+      .returning({ id: workspaces.id });
+    if (!bumped.length) throw new RunLimitError(`Demo limit reached (${maxRunsPerWorkspace()} agent runs per visitor). Open the app in a private window for a fresh demo workspace.`);
+  }
+  const [run] = await db
+    .insert(runs)
+    .values({ workspaceId: ws.id, mandateId, goal: goal.slice(0, 500), redTeam: opts.redTeam, agentMode: opts.agentMode, catalogMode: opts.catalogMode })
+    .returning();
   return run;
 }
 
-/** Start a real agent run in the background; the UI polls its events. */
+/**
+ * Start an agent run in the background; the UI polls its events. Each integration is
+ * live when configured, otherwise the labelled offline simulator (unless DEMO_MODE=off).
+ */
 export async function startAgentRun(ws: Workspace, mandateId: string, goal: string, redTeam: boolean) {
-  requireConfig("anthropic");
-  requireConfig("channel3");
-  requireConfig("paypal");
-  const run = await reserveRun(ws, mandateId, goal, redTeam);
-  const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const agentMode = requireMode("agent");
+  const catalogMode = requireMode("catalog");
+  const payments = currentPayments();
+  const run = await reserveRun(ws, mandateId, goal, { redTeam, agentMode, catalogMode });
+
+  const model =
+    agentMode === "live" ? createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })(anthropicModelId()) : createRuleBasedPlanner({ naive: redTeam });
+  const search =
+    catalogMode === "live"
+      ? (q: string, max?: number) => searchProducts({ apiKey: process.env.CHANNEL3_API_KEY!, query: q, maxPriceUsd: max, userId: ws.id })
+      : async (q: string, max?: number) => simulatedSearch(q, max);
+
   after(() =>
-    executeRun(
-      {
-        db,
-        gateway: paypalGateway,
-        appUrl: appUrl(),
-        model: anthropic(anthropicModelId()),
-        search: (q, max) => searchProducts({ apiKey: process.env.CHANNEL3_API_KEY!, query: q, maxPriceUsd: max, userId: ws.id }),
-      },
-      run.id,
-    ).catch((e) => console.error("run failed", run.id, e)),
+    executeRun({ db, gateway: payments.gateway, simulatedPayments: payments.simulated, appUrl: appUrl(), model, search }, run.id).catch((e) =>
+      console.error("run failed", run.id, e),
+    ),
   );
   return run;
 }
 
 /**
  * Deterministic attack demo: submits exactly what a fully hijacked agent would,
- * through the same policy path the real agent uses. No LLM involved; labelled as a simulation.
+ * through the same policy path the real agent uses. No LLM, no keys needed; labelled as a simulation.
  */
 export async function simulateHijack(ws: Workspace, mandateId: string) {
-  const run = await reserveRun(ws, mandateId, "SIMULATION: agent hijacked by a malicious product listing", true);
+  const run = await reserveRun(ws, mandateId, "SIMULATION: agent hijacked by a malicious product listing", {
+    redTeam: true,
+    agentMode: "simulated",
+    catalogMode: "simulated",
+  });
   const listing = injectedListing("Espresso beans");
   await logEvent(db, run.id, "status", { message: "Simulated hijacked agent (no LLM)", goal: run.goal, redTeam: true, simulation: true });
   await recordCatalog(db, run.id, [{ ...listing, injected: true }]);
@@ -81,9 +101,12 @@ export async function simulateHijack(ws: Workspace, mandateId: string) {
     items: cart.items.map((i) => ({ product_id: i.productId, quantity: i.quantity, unit_price_usd: i.unitCents / 100 })),
     reason: cart.reason,
   });
+  // The hijacked cart is always denied (price mismatch at minimum), so no gateway is ever called.
+  // Record it against whichever payment mode is current, defaulting to simulated.
+  const simulated = modes().payments !== "live";
   const { purchase, policy } = await requestPurchase(
-    { db, gateway: paypalGateway, appUrl: appUrl() },
-    { workspaceId: ws.id, mandateId, runId: run.id, items: cart.items, agentReason: cart.reason, idempotencyKey: `${run.id}:hijack` },
+    { db, gateway: gatewayFor(simulated), appUrl: appUrl() },
+    { workspaceId: ws.id, mandateId, runId: run.id, items: cart.items, agentReason: cart.reason, idempotencyKey: `${run.id}:hijack`, simulated },
   );
   await logEvent(db, run.id, "policy", {
     purchaseId: purchase.id,
@@ -94,7 +117,7 @@ export async function simulateHijack(ws: Workspace, mandateId: string) {
   });
   const summary =
     policy.decision === "DENY"
-      ? `Blocked. The hijacked agent claimed 10 units at $0.01 each from ${listing.merchant}. Leash re-priced the cart from the catalog ($${(policy.totalCents / 100).toFixed(2)}) and denied it on ${decisiveFailures(policy).length} independent rules. PayPal was never called.`
+      ? `Blocked. The hijacked agent claimed 10 units at $0.01 each from ${listing.merchant}. Leash re-priced the cart from the catalog ($${(policy.totalCents / 100).toFixed(2)}) and denied it on ${decisiveFailures(policy).length} independent rules. No payment was attempted.`
       : `Unexpected decision ${policy.decision}`;
   await logEvent(db, run.id, "final", { text: summary });
   await db.update(runs).set({ status: "completed", summary, finishedAt: new Date() }).where(eq(runs.id, run.id));

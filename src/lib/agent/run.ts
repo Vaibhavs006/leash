@@ -27,6 +27,8 @@ export interface AgentDeps {
   search: (query: string, maxPriceUsd?: number) => Promise<NormalizedProduct[]>;
   maxSteps?: number;
   timeoutMs?: number;
+  /** Payments go through the offline simulator (recorded on each purchase). */
+  simulatedPayments?: boolean;
 }
 
 const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
@@ -82,8 +84,22 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
 
   let injected = false;
   let purchaseCount = 0;
+  // The model's text for the current step ("Searching for X..."), written before that step's
+  // tool events so the timeline reads in order.
+  let pendingThought: string | null = null;
+  const flushThought = async () => {
+    if (!pendingThought) return;
+    const text = pendingThought;
+    pendingThought = null;
+    await logEvent(db, runId, "thinking", { text });
+  };
 
-  await logEvent(db, runId, "status", { message: "Agent started", goal: run.goal, redTeam: run.redTeam });
+  await logEvent(db, runId, "status", {
+    message: run.agentMode === "simulated" ? "Simulated agent started (rule-based planner, no LLM)" : "Agent started",
+    goal: run.goal,
+    redTeam: run.redTeam,
+    modes: { agent: run.agentMode, catalog: run.catalogMode, payments: deps.simulatedPayments ? "simulated" : "live" },
+  });
 
   const tools = {
     search_products: tool({
@@ -93,6 +109,7 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
         max_price_usd: z.number().positive().optional().describe("Optional maximum unit price"),
       }),
       execute: async ({ query, max_price_usd }) => {
+        await flushThought();
         await logEvent(db, runId, "tool_call", { tool: "search_products", query, max_price_usd });
         let products = await deps.search(query, max_price_usd);
         if (run.redTeam && !injected) {
@@ -135,6 +152,7 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
         reason: z.string().min(5).max(600).describe("Why this purchase serves the owner's goal"),
       }),
       execute: async ({ items, reason }, { toolCallId }) => {
+        await flushThought();
         if (purchaseCount >= 5) return { decision: "DENY", message: "Run limit: at most 5 purchase requests per run." };
         purchaseCount++;
         await logEvent(db, runId, "tool_call", { tool: "request_purchase", items, reason });
@@ -148,6 +166,7 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
               items: items.map((i) => ({ productId: i.product_id, quantity: i.quantity, unitCents: Math.round(i.unit_price_usd * 100) })),
               agentReason: reason,
               idempotencyKey: `${runId}:${toolCallId}`,
+              simulated: deps.simulatedPayments,
             },
           );
           await logEvent(db, runId, "policy", {
@@ -198,9 +217,16 @@ export async function executeRun(deps: AgentDeps, runId: string): Promise<void> 
       // Hard ceiling so a run always settles before the stale-run sweep (5 min).
       abortSignal: AbortSignal.timeout(deps.timeoutMs ?? 4 * 60 * 1000),
       maxOutputTokens: 2000,
-      onStepEnd: async (step) => {
-        const text = step.text?.trim();
-        if (text && step.toolCalls.length > 0) await logEvent(db, runId, "thinking", { text });
+      onLanguageModelCallEnd: (call) => {
+        const text = call.content
+          .map((c) => (c.type === "text" ? c.text : ""))
+          .join("")
+          .trim();
+        const hasToolCall = call.content.some((c) => c.type === "tool-call");
+        if (text && hasToolCall) pendingThought = text;
+      },
+      onStepEnd: async () => {
+        await flushThought(); // in case no tool ran after the text
       },
     });
     const summary = result.text.trim() || "Run finished.";

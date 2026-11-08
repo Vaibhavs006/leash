@@ -26,7 +26,8 @@ Every request lands in an audit ledger with a 14-rule trace, the agent's reasoni
 - **PayPal:** Vault v3 setup and payment tokens; Orders v2 merchant-initiated vault charges and buyer-approved orders with capture; Payments v2 refunds; payment-token revocation; webhook signature verification and reconciliation. Every POST carries a `PayPal-Request-Id` for idempotency.
 - **AI:** Claude via the Vercel AI SDK in a tool loop with exactly two tools, `search_products` and `request_purchase`. The model never sees credentials or payment tools.
 - **Channel3** for live product search; results are snapshotted server-side and are the only prices Leash will charge.
-- **Policy engine:** a pure function with 35 unit tests. Integration tests against real Postgres cover concurrency (parallel requests can't overspend), idempotency, approval-time re-checks, refunds, webhooks and the agent loop with a scripted model.
+- **Policy engine:** a pure function, heavily unit tested (45 unit tests overall). 26 integration tests against real Postgres cover concurrency (parallel requests can't overspend), idempotency, approval-time re-checks, refunds, webhooks, the agent loop with a scripted model, and the full offline demo flows.
+- **Offline demo mode:** without API keys every integration falls back to a clearly labelled simulator (fictional catalog, rule-based planner, payment simulator) running through the same agent loop, policy engine and ledger, so judges can try everything without credentials.
 
 ## Challenges
 
