@@ -210,3 +210,5 @@ scripts/migrate.mjs            migrations (production dependencies only)
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- Small documentation improvement -->
